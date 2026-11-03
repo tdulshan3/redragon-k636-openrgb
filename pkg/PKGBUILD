@@ -1,0 +1,55 @@
+# OpenRGB (pinned git master) plus the Redragon K636 controller from ../patches.
+# Replaces the distro openrgb package; to go back: sudo pacman -S openrgb
+pkgname=openrgb-k636-git
+pkgver=1.1.r5884.gc6fc801.k636
+pkgrel=1
+pkgdesc="Open source RGB lighting control, with the Redragon K636 controller"
+arch=(x86_64)
+url="https://gitlab.com/CalcProgrammer1/OpenRGB"
+license=(GPL-2.0-or-later)
+depends=(glibc libgcc libstdc++ qt6-base libusb hidapi mbedtls3 hicolor-icon-theme)
+makedepends=(git)
+optdepends=('i2c-tools: mainboard & RAM access')
+provides=(openrgb)
+conflicts=(openrgb)
+_commit=c6fc8016d215cca17d660c47746a08d7ea6a9175
+source=("openrgb::git+https://gitlab.com/CalcProgrammer1/OpenRGB.git#commit=${_commit}"
+        0001-Add-Redragon-K636-Sinowealth-PID-0049-keyboard-contr.patch
+        0002-K636-shorter-consistent-effect-names.patch)
+sha256sums=('SKIP'
+            '66ee4b6fb132f3aef6740807af67f66cec05c68e9c5f208f7ad226542e274b5b'
+            '11cd51bec40bc54452167a3f964ace7fabfb18326a668489f4aad577aed8b83c')
+
+pkgver() {
+    cd openrgb
+    printf "1.1.r%s.g%s.k636" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+    cd openrgb
+    for patch in "$srcdir"/*.patch; do
+        patch -Np1 -i "$patch"
+    done
+}
+
+build() {
+    cd openrgb
+    qmake6 OpenRGB.pro PREFIX=/usr
+    # qmake stamps the build date into the defines, which invalidates an existing precompiled
+    # header; gcc would then -include the old openrgb binary instead
+    rm -rf openrgb.gch
+    make
+}
+
+package() {
+    cd openrgb
+    make INSTALL_ROOT="$pkgdir" install
+
+    # OpenRGB generates its own udev rules (they include the K636); same as the Debian packaging
+    HOME="$srcdir" ./openrgb --generate-udev-rules 60-openrgb.rules
+    install -Dm644 60-openrgb.rules "$pkgdir/usr/lib/udev/rules.d/60-openrgb.rules"
+
+    # The distro package also loads i2c-dev for mainboard and RAM access
+    install -dm755 "$pkgdir/usr/lib/modules-load.d"
+    echo i2c-dev > "$pkgdir/usr/lib/modules-load.d/openrgb.conf"
+}

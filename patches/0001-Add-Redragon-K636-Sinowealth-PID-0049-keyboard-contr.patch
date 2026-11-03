@@ -1,0 +1,1209 @@
+From 6e3a3debc1c79b913fc584ddbeb447ac04db145e Mon Sep 17 00:00:00 2001
+From: tdulshan <tdulshan3@gmail.com>
+Date: Tue, 3 Nov 2026 16:38:05 +0530
+Subject: [PATCH 1/2] Add Redragon K636 (Sinowealth PID 0049) keyboard
+ controller
+
+PID 0049 is shared by several Sinowealth keyboards and the older driver
+for it is disabled because it bricked Redragon K618/K621 boards. This
+controller asks for the model ID first and only continues for the K636
+(probe reply 05 01 02 00 00 00 01 5D).
+
+The config block is only ever read, changed in place and written back,
+with the 5A A5 markers checked. Supports Direct mode (live frames) and
+the 20 onboard effects with speed, brightness and any colour.
+
+Refs #5588
+---
+ .../SinowealthControllerDetect.cpp            |  67 +++
+ .../RGBController_SinowealthKeyboard49.cpp    | 495 ++++++++++++++++++
+ .../RGBController_SinowealthKeyboard49.h      |  80 +++
+ .../SinowealthKeyboard49Controller.cpp        | 373 +++++++++++++
+ .../SinowealthKeyboard49Controller.h          |  96 ++++
+ 5 files changed, 1111 insertions(+)
+ create mode 100644 Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.cpp
+ create mode 100644 Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.h
+ create mode 100644 Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.cpp
+ create mode 100644 Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.h
+
+diff --git a/Controllers/SinowealthController/SinowealthControllerDetect.cpp b/Controllers/SinowealthController/SinowealthControllerDetect.cpp
+index 989fcf15..bd00f8fe 100644
+--- a/Controllers/SinowealthController/SinowealthControllerDetect.cpp
++++ b/Controllers/SinowealthController/SinowealthControllerDetect.cpp
+@@ -15,6 +15,7 @@
+ #include "SinowealthKeyboard10cDevices.h"
+ #include "SinowealthKeyboardController.h" // Disabled
+ #include "SinowealthKeyboard16Controller.h" // Disabled
++#include "SinowealthKeyboard49Controller.h"
+ #include "SinowealthKeyboard90Controller.h"
+ #include "SinowealthGMOWController.h"
+ #include "GenesisXenon200Controller.cpp"
+@@ -23,10 +24,13 @@
+ #include "RGBController_Sinowealth1007.h"
+ #include "RGBController_SinowealthKeyboard.h" // Disabled
+ #include "RGBController_SinowealthKeyboard16.h" // Disabled
++#include "RGBController_SinowealthKeyboard49.h"
+ #include "RGBController_SinowealthKeyboard90.h"
+ #include "RGBController_SinowealthGMOW.h"
+ #include "RGBController_GenesisXenon200.h"
+ #include <hidapi.h>
++#include <chrono>
++#include <map>
+ #include <set>
+ #include "LogManager.h"
+ 
+@@ -41,6 +45,7 @@
+ #define Everest_GT100_PID                   0x0029
+ #define ZET_FURY_PRO_PID                    0x1007
+ #define Fl_Esports_F11_PID                  0x0049
++#define RGB_KEYBOARD_0049PID                0x0049
+ #define RGB_KEYBOARD_0016PID                0x0016
+ #define GENESIS_THOR_300_PID                0x0090
+ #define GENESIS_XENON_200_PID               0x1007
+@@ -442,6 +447,67 @@ DetectedControllers DetectSinowealthKeyboard10c(hid_device_info* info, const std
+     return(detected_controllers);
+ }
+ 
++DetectedControllers DetectSinowealthKeyboard49(hid_device_info* info, const std::string& name)
++{
++    std::lock_guard<std::recursive_mutex> lock(sinowealth_registry_mutex);
++
++    static std::map<std::string, std::chrono::steady_clock::time_point> rejected_paths;
++
++    DetectedControllers                     detected_controllers;
++    std::string                             path = info->path;
++    std::chrono::steady_clock::time_point   now  = std::chrono::steady_clock::now();
++
++    /*-----------------------------------------------------*\
++    | PID 0049 is shared by several keyboards, and sending  |
++    | them the wrong protocol has bricked some.  Ask for    |
++    | the model ID with the probe the vendor app sends, and |
++    | only continue for known models.                       |
++    |                                                       |
++    | This detector runs once per vendor collection, and on |
++    | Linux they all share one path: probe each path once,  |
++    | and skip paths that failed the probe moments ago      |
++    \*-----------------------------------------------------*/
++    if(rejected_paths.count(path) != 0 && (now - rejected_paths[path]) < std::chrono::seconds(5))
++    {
++        return(detected_controllers);
++    }
++
++    if(!SinowealthClaimDevice(path))
++    {
++        return(detected_controllers);
++    }
++
++    hid_device*   dev      = hid_open_path(info->path);
++    unsigned char model_id = 0;
++
++    if(dev)
++    {
++        model_id = SinowealthKeyboard49Controller::ProbeModel(dev);
++    }
++
++    if(model_id == SINOWEALTH_49_MODEL_K636)
++    {
++        SinowealthKeyboard49Controller*     controller     = new SinowealthKeyboard49Controller(dev, info->path, "Redragon K636 Kitava");
++        RGBController_SinowealthKeyboard49* rgb_controller = new RGBController_SinowealthKeyboard49(controller, [path](){ SinowealthUnclaimDevice(path); });
++
++        detected_controllers.push_back(rgb_controller);
++    }
++    else
++    {
++        LOG_DEBUG("[%s] No known model at \"HID: %s\" (model ID 0x%02X)", name.c_str(), info->path, model_id);
++
++        if(dev)
++        {
++            hid_close(dev);
++        }
++
++        SinowealthUnclaimDevice(path);
++        rejected_paths[path] = now;
++    }
++
++    return(detected_controllers);
++}
++
+ REGISTER_HID_DETECTOR_P("Glorious Model O / O-",            DetectSinowealthMouse,              SINOWEALTH_VID, Glorious_Model_O_PID,                   0xFF00          );
+ REGISTER_HID_DETECTOR_P("Glorious Model D / D-",            DetectSinowealthMouse,              SINOWEALTH_VID, Glorious_Model_D_PID,                   0xFF00          );
+ REGISTER_HID_DETECTOR_P("Everest GT-100 RGB",               DetectSinowealthMouse,              SINOWEALTH_VID, Everest_GT100_PID,                      0xFF00          );
+@@ -453,6 +519,7 @@ REGISTER_HID_DETECTOR_PU("Glorious Model D / D- Wireless",  DetectGMOW_Cable,
+ REGISTER_HID_DETECTOR_PU("Genesis Xenon 200",               DetectGenesisXenon200,              SINOWEALTH_VID, GENESIS_XENON_200_PID,                  0xFF00, 1       );
+ REGISTER_HID_DETECTOR_IPU("Genesis Thor 300",               DetectSinowealthGenesisKeyboard,    SINOWEALTH_VID, GENESIS_THOR_300_PID,               1,  0xFF00, 1       );
+ REGISTER_HID_DETECTOR_IPU("Sinowealth Keyboard",            DetectSinowealthKeyboard10c,        SINOWEALTH_VID, RGB_KEYBOARD_010CPID,               1,  0xFF00, 1       );
++REGISTER_HID_DETECTOR_IPU("Redragon K636",                  DetectSinowealthKeyboard49,         SINOWEALTH_VID, RGB_KEYBOARD_0049PID,               1,  0xFF00, 1       );
+ 
+ // Sinowealth keyboards are disabled due to VID/PID pairs being reused from Redragon keyboards, which ended up in bricking the latter
+ //REGISTER_HID_DETECTOR_P("FL ESPORTS F11",                   DetectSinowealthKeyboard,   SINOWEALTH_VID, Fl_Esports_F11_PID,                             0xFF00          );
+diff --git a/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.cpp b/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.cpp
+new file mode 100644
+index 00000000..b23c98ac
+--- /dev/null
++++ b/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.cpp
+@@ -0,0 +1,495 @@
++/*---------------------------------------------------------*\
++| RGBController_SinowealthKeyboard49.cpp                    |
++|                                                           |
++|   RGBController for Sinowealth keyboards with PID 0049    |
++|   that answer the model probe (Redragon K636)             |
++|                                                           |
++|   tdulshan                                    03 Nov 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#include <algorithm>
++#include <climits>
++#include <cstring>
++#include "RGBControllerKeyNames.h"
++#include "RGBController_SinowealthKeyboard49.h"
++
++#define NA                      0xFFFFFFFF
++#define K636_MATRIX_COLS        17      /* columns 17-20 of the key matrix are unused */
++
++/*---------------------------------------------------------*\
++| The palette the vendor app writes for every effect, in    |
++| colour flag order.  Used only if the keyboard's palette   |
++| cannot be read.                                           |
++\*---------------------------------------------------------*/
++static const RGBColor default_palette[SINOWEALTH_49_PALETTE_SIZE] =
++{
++    ToRGBColor(0xFF, 0x00, 0x00),
++    ToRGBColor(0x00, 0x00, 0xFF),
++    ToRGBColor(0x00, 0xFF, 0x00),
++    ToRGBColor(0xFF, 0xFF, 0x00),
++    ToRGBColor(0xFF, 0x00, 0xFF),
++    ToRGBColor(0x00, 0xFF, 0xFF),
++    ToRGBColor(0xFF, 0xFF, 0xFF),
++};
++
++/*---------------------------------------------------------*\
++| Onboard effects 0x01-0x14, named from how they look       |
++\*---------------------------------------------------------*/
++static const char* effect_names[SINOWEALTH_49_EFFECT_COUNT] =
++{
++    "Static",
++    "Breathing",
++    "Spectrum Cycle",
++    "Reactive Wave",
++    "Raindrop",
++    "Pinwheel",
++    "Reactive Ripple",
++    "Starlight",
++    "Reactive Fade",
++    "Snake",
++    "Wave",
++    "Reactive",
++    "Rainbow Wave",
++    "Wiper",
++    "Fan",
++    "Vertical Wave",
++    "Wave Out",
++    "Wave In",
++    "Crossing Wipers",
++    "Reactive Cross",
++};
++
++#define EFFECT_STATIC           0x01
++
++/*---------------------------------------------------------*\
++| How long an effect change must stay unchanged before it   |
++| is written                                                |
++\*---------------------------------------------------------*/
++#define EFFECT_WRITE_DELAY      std::chrono::milliseconds(300)
++
++static unsigned char NearestPaletteIndex(RGBColor color)
++{
++    unsigned char best          = 0;
++    int           best_distance = INT_MAX;
++
++    for(unsigned char i = 0; i < SINOWEALTH_49_PALETTE_SIZE; i++)
++    {
++        int dr       = (int)RGBGetRValue(color) - (int)RGBGetRValue(default_palette[i]);
++        int dg       = (int)RGBGetGValue(color) - (int)RGBGetGValue(default_palette[i]);
++        int db       = (int)RGBGetBValue(color) - (int)RGBGetBValue(default_palette[i]);
++        int distance = dr * dr + dg * dg + db * db;
++
++        if(distance < best_distance)
++        {
++            best          = i;
++            best_distance = distance;
++        }
++    }
++
++    return(best);
++}
++
++/**------------------------------------------------------------------*\
++    @name Redragon K636
++    @category Keyboard
++    @type USB
++    @save :robot:
++    @direct :white_check_mark:
++    @effects :white_check_mark:
++    @detectors DetectSinowealthKeyboard49
++    @comment PID 0049 is shared with other keyboards, so the detector
++        asks for the model ID first and only continues for the K636.
++\*-------------------------------------------------------------------*/
++
++RGBController_SinowealthKeyboard49::RGBController_SinowealthKeyboard49(SinowealthKeyboard49Controller* controller_ptr, std::function<void()> callback)
++{
++    controller        = controller_ptr;
++    shutdown_callback = callback;
++
++    name        = controller->GetName();
++    vendor      = "Redragon";
++    type        = DEVICE_TYPE_KEYBOARD;
++    description = "Sinowealth Keyboard Device (PID 0049)";
++    location    = controller->GetLocation();
++    serial      = controller->GetSerialString();
++
++    /*-----------------------------------------------------*\
++    | Start from what the keyboard holds, so that opening   |
++    | OpenRGB changes nothing                               |
++    \*-----------------------------------------------------*/
++    device_mode = 0xFF;
++
++    for(unsigned int i = 0; i < SINOWEALTH_49_EFFECT_COUNT; i++)
++    {
++        device_effects[i] = { SINOWEALTH_49_COLOR_RANDOM, 3, 3 };
++    }
++
++    if(!controller->ReadState(&device_mode, device_effects))
++    {
++        device_mode = 0xFF;
++    }
++
++    palette_known = controller->ReadPalette(device_palette);
++
++    mode Direct;
++    Direct.name       = "Direct";
++    Direct.value      = SINOWEALTH_49_MODE_DIRECT;
++    Direct.flags      = MODE_FLAG_HAS_PER_LED_COLOR;
++    Direct.color_mode = MODE_COLORS_PER_LED;
++    modes.push_back(Direct);
++
++    for(unsigned int i = 0; i < SINOWEALTH_49_EFFECT_COUNT; i++)
++    {
++        const sinowealth_49_effect_settings& settings = device_effects[i];
++
++        mode Effect;
++        Effect.name           = effect_names[i];
++        Effect.value          = i + 1;
++        Effect.flags          = MODE_FLAG_HAS_BRIGHTNESS | MODE_FLAG_HAS_MODE_SPECIFIC_COLOR | MODE_FLAG_HAS_RANDOM_COLOR | MODE_FLAG_AUTOMATIC_SAVE;
++        Effect.speed_min      = 0;
++        Effect.speed_max      = SINOWEALTH_49_SPEED_MAX;
++        Effect.brightness_min = SINOWEALTH_49_BRIGHTNESS_MIN;
++        Effect.brightness_max = SINOWEALTH_49_BRIGHTNESS_MAX;
++        Effect.colors_min     = 1;
++        Effect.colors_max     = 1;
++        Effect.speed          = std::min(settings.speed, (unsigned char)SINOWEALTH_49_SPEED_MAX);
++        Effect.brightness     = std::clamp(settings.brightness, (unsigned char)SINOWEALTH_49_BRIGHTNESS_MIN, (unsigned char)SINOWEALTH_49_BRIGHTNESS_MAX);
++        Effect.colors.resize(1);
++
++        if(Effect.value != EFFECT_STATIC)
++        {
++            Effect.flags |= MODE_FLAG_HAS_SPEED;
++        }
++
++        if(settings.color_flag < SINOWEALTH_49_PALETTE_SIZE)
++        {
++            Effect.color_mode = MODE_COLORS_MODE_SPECIFIC;
++            Effect.colors[0]  = PaletteColor(Effect.value, settings.color_flag);
++        }
++        else
++        {
++            Effect.color_mode = MODE_COLORS_RANDOM;
++            Effect.colors[0]  = PaletteColor(Effect.value, 0);
++        }
++
++        modes.push_back(Effect);
++    }
++
++    active_mode = 0;
++
++    for(unsigned int i = 0; i < modes.size(); i++)
++    {
++        if(modes[i].value == device_mode)
++        {
++            active_mode = i;
++        }
++    }
++
++    SetupZones();
++
++    update_generation = 0;
++    request_pending   = false;
++    writer_run        = true;
++    writer_thread     = std::thread(&RGBController_SinowealthKeyboard49::WriterThreadFunction, this);
++}
++
++RGBController_SinowealthKeyboard49::~RGBController_SinowealthKeyboard49()
++{
++    Shutdown();
++
++    /*-----------------------------------------------------*\
++    | Stop the writer, then write the last effect change    |
++    | if it is still waiting                                |
++    \*-----------------------------------------------------*/
++    writer_mutex.lock();
++    writer_run = false;
++    writer_mutex.unlock();
++    writer_cv.notify_one();
++    writer_thread.join();
++
++    if(request_pending)
++    {
++        ApplyEffect(request);
++    }
++
++    delete controller;
++
++    if(shutdown_callback)
++    {
++        shutdown_callback();
++    }
++}
++
++void RGBController_SinowealthKeyboard49::SetupZones()
++{
++    /*-----------------------------------------------------*\
++    | Key matrix as wired; the LED value is the key's       |
++    | position in a live frame (column-major)               |
++    \*-----------------------------------------------------*/
++    const char* const keys[SINOWEALTH_49_MATRIX_ROWS][K636_MATRIX_COLS] =
++    {
++        { KEY_EN_ESCAPE,       nullptr,             KEY_EN_F1,       KEY_EN_F2,      KEY_EN_F3,      KEY_EN_F4,      KEY_EN_F5,      KEY_EN_F6,      KEY_EN_F7,         KEY_EN_F8,            KEY_EN_F9,             KEY_EN_F10,          KEY_EN_F11,           KEY_EN_F12,             KEY_EN_PRINT_SCREEN,  KEY_EN_NUMPAD_PLUS,   KEY_EN_NUMPAD_MINUS  },
++        { KEY_EN_BACK_TICK,    KEY_EN_1,            KEY_EN_2,        KEY_EN_3,       KEY_EN_4,       KEY_EN_5,       KEY_EN_6,       KEY_EN_7,       KEY_EN_8,          KEY_EN_9,             KEY_EN_0,              KEY_EN_MINUS,        KEY_EN_EQUALS,        KEY_EN_BACKSPACE,       KEY_EN_NUMPAD_LOCK,   KEY_EN_NUMPAD_DIVIDE, KEY_EN_NUMPAD_TIMES  },
++        { KEY_EN_TAB,          KEY_EN_Q,            KEY_EN_W,        KEY_EN_E,       KEY_EN_R,       KEY_EN_T,       KEY_EN_Y,       KEY_EN_U,       KEY_EN_I,          KEY_EN_O,             KEY_EN_P,              KEY_EN_LEFT_BRACKET, KEY_EN_RIGHT_BRACKET, KEY_EN_ANSI_BACK_SLASH, KEY_EN_NUMPAD_7,      KEY_EN_NUMPAD_8,      KEY_EN_NUMPAD_9      },
++        { KEY_EN_CAPS_LOCK,    KEY_EN_A,            KEY_EN_S,        KEY_EN_D,       KEY_EN_F,       KEY_EN_G,       KEY_EN_H,       KEY_EN_J,       KEY_EN_K,          KEY_EN_L,             KEY_EN_SEMICOLON,      KEY_EN_QUOTE,        nullptr,              KEY_EN_ANSI_ENTER,      KEY_EN_NUMPAD_4,      KEY_EN_NUMPAD_5,      KEY_EN_NUMPAD_6      },
++        { KEY_EN_LEFT_SHIFT,   KEY_EN_Z,            KEY_EN_X,        KEY_EN_C,       KEY_EN_V,       KEY_EN_B,       KEY_EN_N,       KEY_EN_M,       KEY_EN_COMMA,      KEY_EN_PERIOD,        KEY_EN_FORWARD_SLASH,  KEY_EN_RIGHT_SHIFT,  nullptr,              KEY_EN_UP_ARROW,        KEY_EN_NUMPAD_1,      KEY_EN_NUMPAD_2,      KEY_EN_NUMPAD_3      },
++        { KEY_EN_LEFT_CONTROL, KEY_EN_LEFT_WINDOWS, KEY_EN_LEFT_ALT, nullptr,        nullptr,        KEY_EN_SPACE,   nullptr,        nullptr,        KEY_EN_RIGHT_ALT,  KEY_EN_RIGHT_CONTROL, KEY_EN_RIGHT_FUNCTION, nullptr,             KEY_EN_LEFT_ARROW,    KEY_EN_DOWN_ARROW,      KEY_EN_RIGHT_ARROW,   KEY_EN_NUMPAD_0,      KEY_EN_NUMPAD_PERIOD },
++    };
++
++    unsigned int matrix_map[SINOWEALTH_49_MATRIX_ROWS][K636_MATRIX_COLS];
++
++    leds.clear();
++    colors.clear();
++
++    for(unsigned int row = 0; row < SINOWEALTH_49_MATRIX_ROWS; row++)
++    {
++        for(unsigned int col = 0; col < K636_MATRIX_COLS; col++)
++        {
++            if(keys[row][col] == nullptr)
++            {
++                matrix_map[row][col] = NA;
++                continue;
++            }
++
++            matrix_map[row][col] = (unsigned int)leds.size();
++
++            led new_led;
++            new_led.name  = keys[row][col];
++            new_led.value = col * SINOWEALTH_49_MATRIX_ROWS + row;
++            leds.push_back(new_led);
++        }
++    }
++
++    zone keyboard_zone;
++    keyboard_zone.name       = ZONE_EN_KEYBOARD;
++    keyboard_zone.type       = ZONE_TYPE_MATRIX;
++    keyboard_zone.leds_min   = (unsigned int)leds.size();
++    keyboard_zone.leds_max   = (unsigned int)leds.size();
++    keyboard_zone.leds_count = (unsigned int)leds.size();
++    keyboard_zone.matrix_map.Set(SINOWEALTH_49_MATRIX_ROWS, K636_MATRIX_COLS, (unsigned int *)matrix_map);
++
++    zones.clear();
++    zones.push_back(keyboard_zone);
++
++    SetupColors();
++}
++
++void RGBController_SinowealthKeyboard49::DeviceUpdateLEDs()
++{
++    if(modes[active_mode].value != SINOWEALTH_49_MODE_DIRECT)
++    {
++        return;
++    }
++
++    /*-----------------------------------------------------*\
++    | Wait first, then build the frame from the newest      |
++    | colours                                               |
++    \*-----------------------------------------------------*/
++    controller->WaitForFrameSlot();
++
++    std::vector<unsigned char> frame(SINOWEALTH_49_FRAME_SIZE, 0x00);
++
++    for(unsigned int i = 0; i < leds.size(); i++)
++    {
++        unsigned int offset = leds[i].value * 3;
++
++        frame[offset]     = RGBGetRValue(colors[i]);
++        frame[offset + 1] = RGBGetGValue(colors[i]);
++        frame[offset + 2] = RGBGetBValue(colors[i]);
++    }
++
++    controller->SendFrame(frame);
++}
++
++void RGBController_SinowealthKeyboard49::DeviceUpdateZoneLEDs(int /*zone*/)
++{
++    DeviceUpdateLEDs();
++}
++
++void RGBController_SinowealthKeyboard49::DeviceUpdateSingleLED(int /*led*/)
++{
++    DeviceUpdateLEDs();
++}
++
++void RGBController_SinowealthKeyboard49::DeviceUpdateMode()
++{
++    mode&         current    = modes[active_mode];
++    unsigned char new_mode   = (unsigned char)current.value;
++    unsigned int  generation = ++update_generation;
++
++    if(new_mode == SINOWEALTH_49_MODE_DIRECT)
++    {
++        /*-------------------------------------------------*\
++        | Direct replaces any effect change still waiting   |
++        \*-------------------------------------------------*/
++        writer_mutex.lock();
++        request_pending = false;
++        writer_mutex.unlock();
++
++        state_mutex.lock();
++
++        if(device_mode != SINOWEALTH_49_MODE_DIRECT && controller->SetMode(SINOWEALTH_49_MODE_DIRECT, nullptr))
++        {
++            device_mode = SINOWEALTH_49_MODE_DIRECT;
++        }
++
++        state_mutex.unlock();
++
++        DeviceUpdateLEDs();
++        return;
++    }
++
++    effect_request req;
++    req.generation  = generation;
++    req.mode        = new_mode;
++    req.has_speed   = (current.flags & MODE_FLAG_HAS_SPEED) != 0;
++    req.speed       = (unsigned char)current.speed;
++    req.brightness  = (unsigned char)current.brightness;
++    req.random      = (current.color_mode == MODE_COLORS_RANDOM);
++    req.color       = (current.colors.size() > 0) ? current.colors[0] : default_palette[0];
++
++    if(!palette_known && !req.random)
++    {
++        /*-------------------------------------------------*\
++        | Without the keyboard's palette, only the default  |
++        | colours can be used; show the one that will be    |
++        \*-------------------------------------------------*/
++        req.color         = default_palette[NearestPaletteIndex(req.color)];
++        current.colors[0] = req.color;
++    }
++
++    writer_mutex.lock();
++    request         = req;
++    request_pending = true;
++    request_time    = std::chrono::steady_clock::now();
++    writer_mutex.unlock();
++
++    writer_cv.notify_one();
++}
++
++void RGBController_SinowealthKeyboard49::WriterThreadFunction()
++{
++    std::unique_lock<std::mutex> lock(writer_mutex);
++
++    while(writer_run)
++    {
++        if(!request_pending)
++        {
++            writer_cv.wait(lock);
++            continue;
++        }
++
++        std::chrono::steady_clock::time_point due = request_time + EFFECT_WRITE_DELAY;
++
++        if(std::chrono::steady_clock::now() < due)
++        {
++            writer_cv.wait_until(lock, due);
++            continue;
++        }
++
++        effect_request req = request;
++        request_pending    = false;
++
++        lock.unlock();
++        ApplyEffect(req);
++        lock.lock();
++    }
++}
++
++/*---------------------------------------------------------*\
++| Write an effect and its settings.  A colour that is not   |
++| in the effect's palette entry replaces the entry's first  |
++| colour, which means writing the palette block too         |
++\*---------------------------------------------------------*/
++void RGBController_SinowealthKeyboard49::ApplyEffect(const effect_request& req)
++{
++    std::lock_guard<std::mutex> lock(state_mutex);
++
++    if(req.generation != update_generation)
++    {
++        return;
++    }
++
++    sinowealth_49_effect_settings effect = device_effects[req.mode - 1];
++    unsigned char                 new_palette[SINOWEALTH_49_PALETTE_BLOCK_SIZE];
++    bool                          write_palette = false;
++
++    if(req.has_speed)
++    {
++        effect.speed = req.speed;
++    }
++
++    effect.brightness = req.brightness;
++
++    if(req.random)
++    {
++        effect.color_flag = SINOWEALTH_49_COLOR_RANDOM;
++    }
++    else if(!palette_known)
++    {
++        effect.color_flag = NearestPaletteIndex(req.color);
++    }
++    else if(effect.color_flag >= SINOWEALTH_49_PALETTE_SIZE || PaletteColor(req.mode, effect.color_flag) != req.color)
++    {
++        effect.color_flag = SINOWEALTH_49_PALETTE_SIZE;
++
++        for(unsigned char slot = 0; slot < SINOWEALTH_49_PALETTE_SIZE; slot++)
++        {
++            if(PaletteColor(req.mode, slot) == req.color)
++            {
++                effect.color_flag = slot;
++                break;
++            }
++        }
++
++        if(effect.color_flag == SINOWEALTH_49_PALETTE_SIZE)
++        {
++            unsigned int offset = req.mode * SINOWEALTH_49_PALETTE_ENTRY_SIZE;
++
++            memcpy(new_palette, device_palette, sizeof(new_palette));
++            new_palette[offset]     = RGBGetRValue(req.color);
++            new_palette[offset + 1] = RGBGetGValue(req.color);
++            new_palette[offset + 2] = RGBGetBValue(req.color);
++
++            effect.color_flag = 0;
++            write_palette     = true;
++        }
++    }
++
++    const sinowealth_49_effect_settings& stored = device_effects[req.mode - 1];
++
++    if(!write_palette
++    && device_mode       == req.mode
++    && stored.color_flag == effect.color_flag
++    && stored.speed      == effect.speed
++    && stored.brightness == effect.brightness)
++    {
++        return;
++    }
++
++    if(controller->SetMode(req.mode, &effect, write_palette ? new_palette : nullptr))
++    {
++        device_mode                  = req.mode;
++        device_effects[req.mode - 1] = effect;
++
++        if(write_palette)
++        {
++            memcpy(device_palette, new_palette, sizeof(device_palette));
++        }
++    }
++}
++
++RGBColor RGBController_SinowealthKeyboard49::PaletteColor(unsigned char effect, unsigned char slot)
++{
++    if(!palette_known)
++    {
++        return(default_palette[slot]);
++    }
++
++    unsigned int offset = effect * SINOWEALTH_49_PALETTE_ENTRY_SIZE + slot * 3;
++
++    return(ToRGBColor(device_palette[offset], device_palette[offset + 1], device_palette[offset + 2]));
++}
+diff --git a/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.h b/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.h
+new file mode 100644
+index 00000000..a2e0f4ef
+--- /dev/null
++++ b/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.h
+@@ -0,0 +1,80 @@
++/*---------------------------------------------------------*\
++| RGBController_SinowealthKeyboard49.h                      |
++|                                                           |
++|   RGBController for Sinowealth keyboards with PID 0049    |
++|   that answer the model probe (Redragon K636)             |
++|                                                           |
++|   tdulshan                                    03 Nov 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#include <atomic>
++#include <chrono>
++#include <condition_variable>
++#include <functional>
++#include <mutex>
++#include <thread>
++#include "RGBController.h"
++#include "SinowealthKeyboard49Controller.h"
++
++class RGBController_SinowealthKeyboard49 : public RGBController
++{
++public:
++    RGBController_SinowealthKeyboard49(SinowealthKeyboard49Controller* controller_ptr, std::function<void()> shutdown_callback);
++    ~RGBController_SinowealthKeyboard49();
++
++    void SetupZones();
++
++    void DeviceUpdateLEDs();
++    void DeviceUpdateZoneLEDs(int zone);
++    void DeviceUpdateSingleLED(int led);
++
++    void DeviceUpdateMode();
++
++private:
++    typedef struct
++    {
++        unsigned int    generation;
++        unsigned char   mode;
++        bool            has_speed;
++        unsigned char   speed;
++        unsigned char   brightness;
++        bool            random;
++        RGBColor        color;
++    } effect_request;
++
++    SinowealthKeyboard49Controller* controller;
++    std::function<void()>           shutdown_callback;
++
++    /*-----------------------------------------------------*\
++    | What the keyboard holds, to skip writes that would    |
++    | not change anything                                   |
++    \*-----------------------------------------------------*/
++    std::mutex                      state_mutex;
++    unsigned char                   device_mode;
++    sinowealth_49_effect_settings   device_effects[SINOWEALTH_49_EFFECT_COUNT];
++    unsigned char                   device_palette[SINOWEALTH_49_PALETTE_BLOCK_SIZE];
++    bool                            palette_known;
++
++    /*-----------------------------------------------------*\
++    | Effect changes wait in a writer thread until they     |
++    | stop changing, so that dragging a slider or the       |
++    | colour wheel writes the keyboard's memory once        |
++    \*-----------------------------------------------------*/
++    std::thread                             writer_thread;
++    std::mutex                              writer_mutex;
++    std::condition_variable                 writer_cv;
++    bool                                    writer_run;
++    bool                                    request_pending;
++    effect_request                          request;
++    std::chrono::steady_clock::time_point   request_time;
++    std::atomic<unsigned int>               update_generation;
++
++    void        WriterThreadFunction();
++    void        ApplyEffect(const effect_request& req);
++    RGBColor    PaletteColor(unsigned char effect, unsigned char slot);
++};
+diff --git a/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.cpp b/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.cpp
+new file mode 100644
+index 00000000..a8c62b7e
+--- /dev/null
++++ b/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.cpp
+@@ -0,0 +1,373 @@
++/*---------------------------------------------------------*\
++| SinowealthKeyboard49Controller.cpp                        |
++|                                                           |
++|   Driver for Sinowealth keyboards with PID 0049 that      |
++|   answer the model probe (Redragon K636)                  |
++|                                                           |
++|   tdulshan                                    03 Nov 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#include <algorithm>
++#include <cstring>
++#include <thread>
++#include "SinowealthKeyboard49Controller.h"
++#include "StringUtils.h"
++
++/*---------------------------------------------------------*\
++| Everything below repeats packets captured from the        |
++| vendor app.  PID 0049 is shared with keyboards that were  |
++| bricked by a driver that wrote a fixed config image, so   |
++| the config block is only ever read, changed in place and  |
++| written back.                                             |
++|                                                           |
++| Report 5 (6 bytes):    commands                           |
++| Report 6 (1032 bytes): config block, 06 83 B6 on read     |
++|                        and 06 03 B6 on write; palette     |
++|                        block, 06 08 B8 00 40 on write     |
++| Report 8 (382 bytes):  live frame, 08 0A 7A 01 + RGB      |
++\*---------------------------------------------------------*/
++#define REPORT_COMMAND                  0x05
++#define REPORT_DATA                     0x06
++#define REPORT_FRAME                    0x08
++
++#define COMMAND_SIZE                    6
++#define PROBE_REPLY_SIZE                8
++#define DATA_SIZE                       1032
++#define FRAME_HEADER_SIZE               4
++
++#define BLOCK_HEADER_SIZE               8
++
++#define CONFIG_ADDRESS                  0xB6
++#define CONFIG_READ                     0x83
++#define CONFIG_WRITE                    0x03
++
++#define PALETTE_ADDRESS                 0xB8
++#define PALETTE_READ                    0x88
++#define PALETTE_WRITE                   0x08
++
++/*---------------------------------------------------------*\
++| Config block offsets, counting the report ID byte         |
++\*---------------------------------------------------------*/
++#define CONFIG_MIN_SIZE                 0x8B
++#define CONFIG_CUSTOM_FLAG              0x14
++#define CONFIG_MODE                     0x15
++#define CONFIG_EFFECT_TABLE             0x26
++
++#define CONFIG_MARKER_COUNT             3
++
++static const unsigned char config_markers[CONFIG_MARKER_COUNT] = { 0x0E, 0x4E, 0x89 };
++static const unsigned char probe_command[COMMAND_SIZE]      = { REPORT_COMMAND, 0x05, 0x81, 0x00, 0x00, 0x00 };
++static const unsigned char probe_reply_prefix[]             = { REPORT_COMMAND, 0x01, 0x02, 0x00, 0x00, 0x00, 0x01 };
++static const unsigned char frame_header[FRAME_HEADER_SIZE]  = { REPORT_FRAME, 0x0A, 0x7A, 0x01 };
++
++/*---------------------------------------------------------*\
++| The vendor app waits about 20 ms after each packet, and   |
++| about 60 ms after a block write (config, palette).  The   |
++| keyboard is busy storing a block for a while and drops    |
++| packets that arrive meanwhile: nothing is sent within     |
++| BLOCK_SETTLE of a block write, and live frames wait       |
++| longer.  Frames are paced for about 60 fps: the keyboard  |
++| takes one in about 4 ms and shows frames sent every 10 ms |
++\*---------------------------------------------------------*/
++#define PACKET_DELAY                    std::chrono::milliseconds(20)
++#define BLOCK_SETTLE                    std::chrono::milliseconds(100)
++#define FRAME_PERIOD                    std::chrono::milliseconds(16)
++#define FRAME_SETTLE                    std::chrono::milliseconds(200)
++
++SinowealthKeyboard49Controller::SinowealthKeyboard49Controller(hid_device* dev_handle, const char* path, std::string dev_name)
++{
++    dev             = dev_handle;
++    location        = path;
++    name            = dev_name;
++    last_frame_time  = std::chrono::steady_clock::now() - FRAME_PERIOD;
++    last_block_time = std::chrono::steady_clock::now() - FRAME_SETTLE;
++}
++
++/*---------------------------------------------------------*\
++| Wait until the last block write has been stored           |
++\*---------------------------------------------------------*/
++void SinowealthKeyboard49Controller::WaitForBlockWrite()
++{
++    std::this_thread::sleep_until(last_block_time + BLOCK_SETTLE);
++}
++
++SinowealthKeyboard49Controller::~SinowealthKeyboard49Controller()
++{
++    hid_close(dev);
++}
++
++/*---------------------------------------------------------*\
++| Model probe, as sent by the vendor app at launch.  The    |
++| reply is read with a length of 8 although report 5 is     |
++| declared as 6 bytes.  Returns 0 when the reply does not   |
++| have the expected form.                                   |
++\*---------------------------------------------------------*/
++unsigned char SinowealthKeyboard49Controller::ProbeModel(hid_device* dev)
++{
++    unsigned char reply[PROBE_REPLY_SIZE] = { REPORT_COMMAND };
++
++    if(hid_send_feature_report(dev, probe_command, COMMAND_SIZE) < 0)
++    {
++        return(0);
++    }
++
++    std::this_thread::sleep_for(PACKET_DELAY);
++
++    int len = hid_get_feature_report(dev, reply, PROBE_REPLY_SIZE);
++
++    std::this_thread::sleep_for(PACKET_DELAY);
++
++    if(len != PROBE_REPLY_SIZE || memcmp(reply, probe_reply_prefix, sizeof(probe_reply_prefix)) != 0)
++    {
++        return(0);
++    }
++
++    return(reply[PROBE_REPLY_SIZE - 1]);
++}
++
++std::string SinowealthKeyboard49Controller::GetLocation()
++{
++    return("HID: " + location);
++}
++
++std::string SinowealthKeyboard49Controller::GetName()
++{
++    return(name);
++}
++
++std::string SinowealthKeyboard49Controller::GetSerialString()
++{
++    wchar_t serial_string[128];
++    int     ret = hid_get_serial_number_string(dev, serial_string, 128);
++
++    if(ret != 0)
++    {
++        return("");
++    }
++
++    return(StringUtils::wstring_to_string(serial_string));
++}
++
++/*---------------------------------------------------------*\
++| Read the active mode and the settings of every effect     |
++\*---------------------------------------------------------*/
++bool SinowealthKeyboard49Controller::ReadState(unsigned char* mode, sinowealth_49_effect_settings* effects)
++{
++    std::lock_guard<std::mutex> lock(dev_mutex);
++    unsigned char               buf[DATA_SIZE];
++
++    if(!ReadConfig(buf))
++    {
++        return(false);
++    }
++
++    *mode = buf[CONFIG_MODE];
++
++    for(unsigned int i = 0; i < SINOWEALTH_49_EFFECT_COUNT; i++)
++    {
++        effects[i].color_flag   = buf[CONFIG_EFFECT_TABLE + 2 * i];
++        effects[i].speed        = buf[CONFIG_EFFECT_TABLE + 2 * i + 1] >> 4;
++        effects[i].brightness   = buf[CONFIG_EFFECT_TABLE + 2 * i + 1] & 0x0F;
++    }
++
++    return(true);
++}
++
++/*---------------------------------------------------------*\
++| Read the palette block (SINOWEALTH_49_PALETTE_BLOCK_SIZE  |
++| bytes).  The vendor app never reads it; this is the read  |
++| the PID 0016 driver uses for its colour block, and on the |
++| K636 it returned exactly the palette the app had written. |
++| The reply does not echo the block address.                |
++\*---------------------------------------------------------*/
++bool SinowealthKeyboard49Controller::ReadPalette(unsigned char* palette)
++{
++    std::lock_guard<std::mutex> lock(dev_mutex);
++    unsigned char               command[COMMAND_SIZE] = { REPORT_COMMAND, PALETTE_READ, PALETTE_ADDRESS, 0x00, 0x40, 0x00 };
++    unsigned char               buf[DATA_SIZE]        = { REPORT_DATA };
++
++    WaitForBlockWrite();
++
++    if(hid_send_feature_report(dev, command, COMMAND_SIZE) < 0)
++    {
++        return(false);
++    }
++
++    std::this_thread::sleep_for(PACKET_DELAY);
++
++    int len = hid_get_feature_report(dev, buf, DATA_SIZE);
++
++    std::this_thread::sleep_for(PACKET_DELAY);
++
++    if(len != DATA_SIZE || buf[0] != REPORT_DATA || buf[1] != PALETTE_READ)
++    {
++        return(false);
++    }
++
++    memcpy(palette, buf + BLOCK_HEADER_SIZE, SINOWEALTH_49_PALETTE_BLOCK_SIZE);
++
++    return(true);
++}
++
++/*---------------------------------------------------------*\
++| Switch to a mode.  For an onboard effect, effect holds    |
++| its new settings; for Direct it is ignored.  If palette   |
++| is given, the palette block is written first, as the      |
++| vendor app does.  Both blocks are kept across power       |
++| cycles, so callers should skip writes that change nothing |
++\*---------------------------------------------------------*/
++bool SinowealthKeyboard49Controller::SetMode(unsigned char mode, const sinowealth_49_effect_settings* effect, const unsigned char* palette)
++{
++    std::lock_guard<std::mutex> lock(dev_mutex);
++    unsigned char               buf[DATA_SIZE];
++
++    if(mode > SINOWEALTH_49_EFFECT_COUNT)
++    {
++        return(false);
++    }
++
++    if(!ReadConfig(buf))
++    {
++        return(false);
++    }
++
++    if(palette != nullptr)
++    {
++        unsigned char palette_buf[DATA_SIZE] = { REPORT_DATA, PALETTE_WRITE, PALETTE_ADDRESS, 0x00, 0x40 };
++
++        memcpy(palette_buf + BLOCK_HEADER_SIZE, palette, SINOWEALTH_49_PALETTE_BLOCK_SIZE);
++
++        if(hid_send_feature_report(dev, palette_buf, DATA_SIZE) < 0)
++        {
++            return(false);
++        }
++
++        last_block_time = std::chrono::steady_clock::now();
++
++        WaitForBlockWrite();
++    }
++
++    buf[CONFIG_CUSTOM_FLAG] = 0x00;
++    buf[CONFIG_MODE]        = mode;
++
++    if(mode != SINOWEALTH_49_MODE_DIRECT && effect != nullptr)
++    {
++        unsigned char color_flag = std::min(effect->color_flag, (unsigned char)SINOWEALTH_49_COLOR_RANDOM);
++        unsigned char speed      = std::min(effect->speed,      (unsigned char)SINOWEALTH_49_SPEED_MAX);
++        unsigned char brightness = std::clamp(effect->brightness, (unsigned char)SINOWEALTH_49_BRIGHTNESS_MIN, (unsigned char)SINOWEALTH_49_BRIGHTNESS_MAX);
++
++        buf[CONFIG_EFFECT_TABLE + 2 * (mode - 1)]       = color_flag;
++        buf[CONFIG_EFFECT_TABLE + 2 * (mode - 1) + 1]   = (speed << 4) | brightness;
++    }
++
++    return(WriteConfig(buf));
++}
++
++/*---------------------------------------------------------*\
++| Wait until the keyboard can take the next live frame.     |
++| Call this before building a frame, so that the frame      |
++| holds the newest colours when it is sent                  |
++\*---------------------------------------------------------*/
++void SinowealthKeyboard49Controller::WaitForFrameSlot()
++{
++    std::chrono::time_point<std::chrono::steady_clock> slot;
++
++    {
++        std::lock_guard<std::mutex> lock(dev_mutex);
++        slot = std::max(last_frame_time + FRAME_PERIOD, last_block_time + FRAME_SETTLE);
++    }
++
++    std::this_thread::sleep_until(slot);
++}
++
++/*---------------------------------------------------------*\
++| Send one live frame (Direct mode).  The keyboard keeps    |
++| showing the last frame, so no keepalive is needed         |
++\*---------------------------------------------------------*/
++void SinowealthKeyboard49Controller::SendFrame(const std::vector<unsigned char>& frame)
++{
++    std::lock_guard<std::mutex> lock(dev_mutex);
++    unsigned char               buf[FRAME_HEADER_SIZE + SINOWEALTH_49_FRAME_SIZE] = {};
++
++    if(frame.size() != SINOWEALTH_49_FRAME_SIZE)
++    {
++        return;
++    }
++
++    memcpy(buf, frame_header, FRAME_HEADER_SIZE);
++    memcpy(buf + FRAME_HEADER_SIZE, frame.data(), SINOWEALTH_49_FRAME_SIZE);
++
++    std::this_thread::sleep_until(std::max(last_frame_time + FRAME_PERIOD, last_block_time + FRAME_SETTLE));
++
++    hid_send_feature_report(dev, buf, sizeof(buf));
++
++    last_frame_time = std::chrono::steady_clock::now();
++}
++
++/*---------------------------------------------------------*\
++| Read the config block into buf (DATA_SIZE bytes, zero     |
++| after the bytes the keyboard returns) and check it        |
++\*---------------------------------------------------------*/
++bool SinowealthKeyboard49Controller::ReadConfig(unsigned char* buf)
++{
++    unsigned char command[COMMAND_SIZE] = { REPORT_COMMAND, CONFIG_READ, CONFIG_ADDRESS, 0x00, 0x00, 0x00 };
++
++    memset(buf, 0x00, DATA_SIZE);
++
++    WaitForBlockWrite();
++
++    if(hid_send_feature_report(dev, command, COMMAND_SIZE) < 0)
++    {
++        return(false);
++    }
++
++    std::this_thread::sleep_for(PACKET_DELAY);
++
++    buf[0]  = REPORT_DATA;
++    int len = hid_get_feature_report(dev, buf, DATA_SIZE);
++
++    std::this_thread::sleep_for(PACKET_DELAY);
++
++    if(len < CONFIG_MIN_SIZE || buf[0] != REPORT_DATA || buf[1] != CONFIG_READ || buf[2] != CONFIG_ADDRESS)
++    {
++        return(false);
++    }
++
++    for(unsigned int i = 0; i < CONFIG_MARKER_COUNT; i++)
++    {
++        if(buf[config_markers[i]] != 0x5A || buf[config_markers[i] + 1] != 0xA5)
++        {
++            return(false);
++        }
++    }
++
++    return(true);
++}
++
++/*---------------------------------------------------------*\
++| Write back a block read by ReadConfig: the same bytes,    |
++| with the read command replaced by the write command       |
++\*---------------------------------------------------------*/
++bool SinowealthKeyboard49Controller::WriteConfig(unsigned char* buf)
++{
++    for(unsigned int i = 0; i < CONFIG_MARKER_COUNT; i++)
++    {
++        if(buf[config_markers[i]] != 0x5A || buf[config_markers[i] + 1] != 0xA5)
++        {
++            return(false);
++        }
++    }
++
++    buf[1] = CONFIG_WRITE;
++
++    int ret = hid_send_feature_report(dev, buf, DATA_SIZE);
++
++    last_block_time = std::chrono::steady_clock::now();
++
++    std::this_thread::sleep_for(PACKET_DELAY);
++
++    return(ret >= 0);
++}
+diff --git a/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.h b/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.h
+new file mode 100644
+index 00000000..db53b1df
+--- /dev/null
++++ b/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.h
+@@ -0,0 +1,96 @@
++/*---------------------------------------------------------*\
++| SinowealthKeyboard49Controller.h                          |
++|                                                           |
++|   Driver for Sinowealth keyboards with PID 0049 that      |
++|   answer the model probe (Redragon K636)                  |
++|                                                           |
++|   tdulshan                                    03 Nov 2026 |
++|                                                           |
++|   This file is part of the OpenRGB project                |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#include <chrono>
++#include <mutex>
++#include <string>
++#include <vector>
++#include <hidapi.h>
++
++/*---------------------------------------------------------*\
++| Model IDs, the last byte of the probe reply               |
++\*---------------------------------------------------------*/
++#define SINOWEALTH_49_MODEL_K636            0x5D
++
++/*---------------------------------------------------------*\
++| Mode values (config byte 0x15)                            |
++|   0x00        Direct: the keyboard is dark and shows the  |
++|               live frames sent with report 8              |
++|   0x01-0x14   Onboard effects                             |
++\*---------------------------------------------------------*/
++#define SINOWEALTH_49_MODE_DIRECT           0x00
++#define SINOWEALTH_49_EFFECT_COUNT          20
++
++/*---------------------------------------------------------*\
++| Per-effect settings: colour flag 0-6 picks a colour from  |
++| the effect's 7-colour palette, 7 is multicolour; speed    |
++| and brightness are 0-4 (higher is faster / brighter)      |
++\*---------------------------------------------------------*/
++#define SINOWEALTH_49_COLOR_RANDOM          0x07
++#define SINOWEALTH_49_PALETTE_SIZE          7
++
++/*---------------------------------------------------------*\
++| Palette block: entry m (effect m) holds 7 RGB colours at  |
++| offset 21 * m                                             |
++\*---------------------------------------------------------*/
++#define SINOWEALTH_49_PALETTE_BLOCK_SIZE    1024
++#define SINOWEALTH_49_PALETTE_ENTRY_SIZE    (SINOWEALTH_49_PALETTE_SIZE * 3)
++#define SINOWEALTH_49_SPEED_MAX             4
++#define SINOWEALTH_49_BRIGHTNESS_MIN        1
++#define SINOWEALTH_49_BRIGHTNESS_MAX        4
++
++/*---------------------------------------------------------*\
++| Live frames: 6 x 21 key matrix, column-major, RGB         |
++\*---------------------------------------------------------*/
++#define SINOWEALTH_49_MATRIX_ROWS           6
++#define SINOWEALTH_49_MATRIX_COLS           21
++#define SINOWEALTH_49_FRAME_SIZE            (SINOWEALTH_49_MATRIX_ROWS * SINOWEALTH_49_MATRIX_COLS * 3)
++
++typedef struct
++{
++    unsigned char   color_flag;
++    unsigned char   speed;
++    unsigned char   brightness;
++} sinowealth_49_effect_settings;
++
++class SinowealthKeyboard49Controller
++{
++public:
++    SinowealthKeyboard49Controller(hid_device* dev_handle, const char* path, std::string dev_name);
++    ~SinowealthKeyboard49Controller();
++
++    static unsigned char ProbeModel(hid_device* dev);
++
++    std::string GetLocation();
++    std::string GetName();
++    std::string GetSerialString();
++
++    bool        ReadState(unsigned char* mode, sinowealth_49_effect_settings* effects);
++    bool        ReadPalette(unsigned char* palette);
++    bool        SetMode(unsigned char mode, const sinowealth_49_effect_settings* effect, const unsigned char* palette = nullptr);
++    void        WaitForFrameSlot();
++    void        SendFrame(const std::vector<unsigned char>& frame);
++
++private:
++    hid_device*                                         dev;
++    std::string                                         location;
++    std::string                                         name;
++    std::mutex                                          dev_mutex;
++    std::chrono::time_point<std::chrono::steady_clock>  last_frame_time;
++    std::chrono::time_point<std::chrono::steady_clock>  last_block_time;
++
++    void        WaitForBlockWrite();
++    bool        ReadConfig(unsigned char* buf);
++    bool        WriteConfig(unsigned char* buf);
++};
+-- 
+2.56.0
+

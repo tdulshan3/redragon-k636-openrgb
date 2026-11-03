@@ -1,0 +1,46 @@
+From da058d199c31e66b84266f9dd36d35649addea47 Mon Sep 17 00:00:00 2001
+From: tdulshan <tdulshan3@gmail.com>
+Date: Tue, 3 Nov 2026 17:22:59 +0530
+Subject: [PATCH 2/2] K636: shorter, consistent effect names
+
+---
+ .../RGBController_SinowealthKeyboard49.cpp         | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.cpp b/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.cpp
+index b23c98ac..bc8394c5 100644
+--- a/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.cpp
++++ b/Controllers/SinowealthController/SinowealthKeyboard49Controller/RGBController_SinowealthKeyboard49.cpp
+@@ -43,22 +43,22 @@ static const char* effect_names[SINOWEALTH_49_EFFECT_COUNT] =
+     "Static",
+     "Breathing",
+     "Spectrum Cycle",
+-    "Reactive Wave",
++    "Reactive Line",
+     "Raindrop",
+     "Pinwheel",
+     "Reactive Ripple",
+     "Starlight",
+-    "Reactive Fade",
++    "Reverse Reactive",
+     "Snake",
+     "Wave",
+     "Reactive",
+     "Rainbow Wave",
+-    "Wiper",
+-    "Fan",
++    "Sweep",
++    "Spin",
+     "Vertical Wave",
+-    "Wave Out",
+-    "Wave In",
+-    "Crossing Wipers",
++    "Outward Wave",
++    "Inward Wave",
++    "Crossing Sweep",
+     "Reactive Cross",
+ };
+ 
+-- 
+2.56.0
+

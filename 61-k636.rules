@@ -1,0 +1,2 @@
+# Redragon K636 Kitava (258a:0049): let the logged-in user open its hidraw nodes
+SUBSYSTEMS=="usb|hidraw", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="0049", TAG+="uaccess"

@@ -1,0 +1,19 @@
+# Private notes and local state
+HANDOFF.md
+upstream/
+backups/
+openrgb-test-config/
+
+# Build output
+pkg/src/
+pkg/pkg/
+pkg/openrgb/
+pkg/*.pkg.tar.*
+pkg/*.log
+analysis/driver_check/driver_check
+__pycache__/
+
+# Test artefacts
+palette/read-*.bin
+palette/after-*.bin
+palette/check.bin
