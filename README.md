@@ -109,6 +109,30 @@ To go back to the distribution's version: `sudo pacman -S openrgb`.
 | [`k636.py`](k636.py) | Test tool used to work out the protocol (see below) |
 | [`analysis/`](analysis) | USBPcap decoder and offline checks against the app's captures |
 | [`perkey/`](perkey), [`palette/`](palette) | The app's per-key and palette data (restore images), and test frames |
+| [`shaders/`](shaders) | Fourteen calm animated scenes for the OpenRGB Effects plugin's Shaders effect, laid out for the `dexmap` Visual Map. See [Shaders](#shaders) below |
+
+## Shaders
+
+Each file in [`shaders/`](shaders) is a scene drawn across the `dexmap` Visual Map: keyboard bottom-left, mouse beside it, the two RAM sticks upper right with the D_LED ring next to them. Copy the `.fs` files into `~/.config/OpenRGB/plugins/settings/effect-shaders/`, add a Shaders effect, pick one, and apply it to the `dexmap` virtual controller only. Speed 1000 runs them in real time.
+
+| Shader | Scene |
+|---|---|
+| `koi-pond.fs` | Koi swim loops over the keyboard, along the RAM sticks and around the ring; rain ripples, lily pads |
+| `shoreline.fs` | Swells roll past the RAM and break on the keyboard; foam, wet sand drying |
+| `firefly-meadow.fs` | Fireflies over a night meadow, the ring is the moon, a group flash every two minutes |
+| `lava-lamp.fs` | Wax rises and sinks in the keyboard, each RAM stick and the ring |
+| `aurora.fs` | Aurora curtains over the RAM and ring, mirrored in a frozen lake on the keyboard |
+| `jellyfish.fs` | Glowing jellyfish pulse upward through the keyboard, the RAM and the ring |
+| `lighthouse.fs` | RAM is the striped tower, the ring is the turning lamp, its beam sweeps the sea on the keyboard |
+| `snowfall.fs` | Flakes drift down, snow piles up on the keyboard over minutes, then melts |
+| `hourglass.fs` | Sand drains from the RAM onto a growing mound on the keyboard; the ring is a ten-minute dial |
+| `embers.fs` | The keyboard is a bed of slowly breathing coals; sparks rise up the RAM |
+| `sakura.fs` | RAM and ring are cherry blossom; petals blow across the keyboard and gather on the bottom rows |
+| `star-trails.fs` | The sky turns around the ring like a long exposure; hills and windows on the bottom rows |
+| `wheat-field.fs` | Wind gusts roll across a golden field; sunset sky on the RAM, the sun's glow on the ring |
+| `rainy-window.fs` | Drops run down the glass over out-of-focus city lights |
+
+Device positions are `#define`s at the top of each file, in Visual Map grid units. Update them if you move a device in the map. Each file also has a short tuning block.
 
 ## Test tool: `k636.py`
 

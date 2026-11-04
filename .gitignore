@@ -17,3 +17,6 @@ __pycache__/
 palette/read-*.bin
 palette/after-*.bin
 palette/check.bin
+
+# Shader preview GIFs (large, regenerated locally)
+shaders/previews/
