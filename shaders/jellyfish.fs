@@ -11,10 +11,10 @@
 
 // ---- your Visual Map layout (grid units from the dexmap file, y grows down) --
 #define MAP_SIZE   vec2(64.0, 64.0)
-#define KB_MIN     vec2( 0.2, 43.2)     // keyboard top-left corner
-#define KB_MAX     vec2(38.5, 56.8)     // keyboard bottom-right corner
-#define RAM_X      45.5                 // between the two RAM sticks
-#define RING_X     56.7                 // centre of the D_LED ring
+#define KB_MIN     vec2( 0.6, 45.4)     // keyboard top-left corner
+#define KB_MAX     vec2(38.9, 58.9)     // keyboard bottom-right corner
+#define RAM_X      45.2                 // between the two RAM sticks
+#define RING_X     56.8                 // centre of the D_LED ring
 
 // ---- tuning ------------------------------------------------------------------
 #define JELLY_SPEED 1.0                 // >1 = jellies pulse and rise faster

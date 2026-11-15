@@ -109,11 +109,11 @@ To go back to the distribution's version: `sudo pacman -S openrgb`.
 | [`k636.py`](k636.py) | Test tool used to work out the protocol (see below) |
 | [`analysis/`](analysis) | USBPcap decoder and offline checks against the app's captures |
 | [`perkey/`](perkey), [`palette/`](palette) | The app's per-key and palette data (restore images), and test frames |
-| [`shaders/`](shaders) | Fourteen calm animated scenes for the OpenRGB Effects plugin's Shaders effect, laid out for the `dexmap` Visual Map. See [Shaders](#shaders) below |
+| [`shaders/`](shaders) | Nineteen calm animated scenes for the OpenRGB Effects plugin's Shaders effect, laid out for the `dexmap` Visual Map. See [Shaders](#shaders) below |
 
 ## Shaders
 
-Each file in [`shaders/`](shaders) is a scene drawn across the `dexmap` Visual Map: keyboard bottom-left, mouse beside it, the two RAM sticks upper right with the D_LED ring next to them. Copy the `.fs` files into `~/.config/OpenRGB/plugins/settings/effect-shaders/`, add a Shaders effect, pick one, and apply it to the `dexmap` virtual controller only. Speed 1000 runs them in real time.
+Each file in [`shaders/`](shaders) is a scene drawn across the `dexmap` Visual Map: keyboard bottom-left, the two RAM sticks upper right with the D_LED ring next to them. Copy the `.fs` files into `~/.config/OpenRGB/plugins/settings/effect-shaders/`, add a Shaders effect, pick one, and apply it to the `dexmap` virtual controller only. Speed 1000 runs them in real time.
 
 | Shader | Scene |
 |---|---|
@@ -131,6 +131,11 @@ Each file in [`shaders/`](shaders) is a scene drawn across the `dexmap` Visual M
 | `star-trails.fs` | The sky turns around the ring like a long exposure; hills and windows on the bottom rows |
 | `wheat-field.fs` | Wind gusts roll across a golden field; sunset sky on the RAM, the sun's glow on the ring |
 | `rainy-window.fs` | Drops run down the glass over out-of-focus city lights |
+| `lantern-festival.fs` | Paper lanterns float down a dark river on the keyboard; sky lanterns climb the RAM and circle the ring |
+| `grandfather-clock.fs` | Brass pendulum swings across the keyboard; counter-moving weights on the RAM; ticking escapement on the ring |
+| `deep-sonar.fs` | Rotary sonar sweep on the ring, depth and echo meters on the RAM, expanding ping rings and contacts on the keyboard |
+| `bamboo-rain.fs` | Water trickles down the left RAM stick to fill a tipping bamboo spout on the right; each tip sends ripples across the keyboard |
+| `northern-train.fs` | Night sleeper express crosses the keyboard with headlight, warm coach windows and red tail-lamp; steam rises up the RAM |
 
 Device positions are `#define`s at the top of each file, in Visual Map grid units. Update them if you move a device in the map. Each file also has a short tuning block.
 

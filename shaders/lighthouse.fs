@@ -13,12 +13,12 @@
 // ---- your Visual Map layout (grid units from the dexmap file, y grows down) --
 #define MAP_SIZE   vec2(64.0, 64.0)
 #define MOUSE_POS  vec2(43.5, 49.8)
-#define RAM_L_X    43.7                 // centre line of the left RAM stick
+#define RAM_L_X    43.1                 // centre line of the left RAM stick
 #define RAM_R_X    47.3                 // centre line of the right RAM stick
-#define RAM_TOP    9.8
-#define RAM_LED    3.26                 // height of one RAM LED
-#define RING_POS   vec2(56.7, 19.3)     // centre of the D_LED ring = the lamp
-#define RING_R     6.4
+#define RAM_TOP    8.8
+#define RAM_LED    4.01                 // height of one RAM LED
+#define RING_POS   vec2(56.8, 19.0)     // centre of the D_LED ring = the lamp
+#define RING_R     5.6
 #define SEA_Y      38.0                 // everything below this is sea
 
 // ---- tuning ------------------------------------------------------------------

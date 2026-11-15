@@ -14,12 +14,12 @@
 
 // ---- your Visual Map layout (grid units from the dexmap file, y grows down) --
 #define MAP_SIZE   vec2(64.0, 64.0)
-#define KB_MIN     vec2( 0.2, 43.2)     // keyboard top-left corner
-#define KB_MAX     vec2(38.5, 56.8)     // keyboard bottom-right corner
+#define KB_MIN     vec2( 0.6, 45.4)     // keyboard top-left corner
+#define KB_MAX     vec2(38.9, 58.9)     // keyboard bottom-right corner
 #define MOUSE_POS  vec2(43.5, 49.8)
-#define RING_POS   vec2(56.7, 19.3)     // centre of the D_LED ring = centre of the moon
-#define RAM_POS    vec2(45.5, 19.6)     // middle of the two RAM sticks
-#define MOON_R     7.0                  // moon radius (the ring LEDs sit just inside its rim)
+#define RING_POS   vec2(56.8, 19.0)     // centre of the D_LED ring = centre of the moon
+#define RAM_POS    vec2(45.2, 20.8)     // middle of the two RAM sticks
+#define MOON_R     6.2                  // moon radius (the ring LEDs sit just inside its rim)
 
 // ---- tuning ------------------------------------------------------------------
 #define BLINK_SPEED 1.0                 // >1 blinks more often

@@ -12,14 +12,14 @@
 
 // ---- your Visual Map layout (grid units from the dexmap file, y grows down) --
 #define MAP_SIZE   vec2(64.0, 64.0)
-#define KB_MIN     vec2( 0.2, 43.2)     // keyboard top-left corner
-#define KB_MAX     vec2(38.5, 56.8)     // keyboard bottom-right corner
+#define KB_MIN     vec2( 0.6, 45.4)     // keyboard top-left corner
+#define KB_MAX     vec2(38.9, 58.9)     // keyboard bottom-right corner
 #define MOUSE_POS  vec2(43.5, 49.8)
-#define RAM_L_X    43.7                 // centre line of the left RAM stick
+#define RAM_L_X    43.1                 // centre line of the left RAM stick
 #define RAM_R_X    47.3                 // centre line of the right RAM stick
-#define RAM_MID_Y  19.6                 // vertical middle of the RAM sticks
-#define RING_POS   vec2(56.7, 19.3)     // centre of the D_LED ring
-#define RING_R     6.4                  // radius of the D_LED ring
+#define RAM_MID_Y  20.8                 // vertical middle of the RAM sticks
+#define RING_POS   vec2(56.8, 19.0)     // centre of the D_LED ring
+#define RING_R     5.6                  // radius of the D_LED ring
 
 // ---- tuning ------------------------------------------------------------------
 #define FISH_SPEED 1.0                  // multiplies every koi's swimming speed

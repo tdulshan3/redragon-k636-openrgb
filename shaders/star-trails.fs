@@ -14,11 +14,11 @@
 
 // ---- your Visual Map layout (grid units from the dexmap file, y grows down) --
 #define MAP_SIZE   vec2(64.0, 64.0)
-#define KB_MIN     vec2( 0.2, 43.2)     // keyboard top-left corner
-#define KB_MAX     vec2(38.5, 56.8)     // keyboard bottom-right corner
+#define KB_MIN     vec2( 0.6, 45.4)     // keyboard top-left corner
+#define KB_MAX     vec2(38.9, 58.9)     // keyboard bottom-right corner
 #define MOUSE_POS  vec2(43.5, 49.8)
-#define RING_POS   vec2(56.7, 19.3)     // centre of the D_LED ring = the pole star
-#define HILL_Y     49.5                 // where the hills start (keyboard row 3)
+#define RING_POS   vec2(56.8, 19.0)     // centre of the D_LED ring = the pole star
+#define HILL_Y     51.7                 // where the hills start (keyboard row 3)
 
 // ---- tuning ------------------------------------------------------------------
 #define TURN_SEC   300.0                // seconds for the sky to turn once

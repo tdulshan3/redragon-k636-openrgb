@@ -13,11 +13,11 @@
 
 // ---- your Visual Map layout (grid units from the dexmap file, y grows down) --
 #define MAP_SIZE   vec2(64.0, 64.0)
-#define KB_MIN     vec2( 0.2, 43.2)     // keyboard top-left corner
-#define KB_MAX     vec2(38.5, 56.8)     // keyboard bottom-right corner
+#define KB_MIN     vec2( 0.6, 45.4)     // keyboard top-left corner
+#define KB_MAX     vec2(38.9, 58.9)     // keyboard bottom-right corner
 #define MOUSE_POS  vec2(43.5, 49.8)
-#define RAM_TOP    9.8
-#define RAM_LED    3.26                 // height of one RAM LED
+#define RAM_TOP    8.8
+#define RAM_LED    4.01                 // height of one RAM LED
 #define KEY        2.25                 // keyboard key pitch
 
 // ---- tuning ------------------------------------------------------------------

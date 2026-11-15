@@ -13,7 +13,7 @@
 
 // ---- your Visual Map layout (grid units from the dexmap file, y grows down) --
 #define MAP_SIZE    vec2(64.0, 64.0)
-#define SHORE_Y     51.1      // resting waterline, grid y (keyboard row 3 of 0..5)
+#define SHORE_Y     53.3      // resting waterline, grid y (keyboard row 3 of 0..5)
 
 // ---- tuning ------------------------------------------------------------------
 #define WAVE_SEC    9.0       // seconds between waves
