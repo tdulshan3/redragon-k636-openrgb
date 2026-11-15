@@ -1,0 +1,528 @@
+Subject: [PATCH 3/3] K636: find the report collections on Windows
+
+Reports 5, 6 and 8 are declared in separate top-level collections of
+interface 1. Linux (hidraw) reaches all of them through one path; Windows
+gives each collection its own path (&col05, &col06, &col08), and a report
+can only be sent through the collection that declares it.
+
+The detector now reads each vendor collection's report descriptor
+(hid_get_report_descriptor; on Windows hidapi rebuilds it per collection),
+picks the path that declares each report, and gives the controller one
+handle per report. On Linux all three are the same handle, so nothing
+changes there.
+
+All collections of one keyboard share one claim key (the path without
+&colNN and its instance suffix), so the keyboard is probed once. A
+keyboard whose collections are still arriving after being plugged in is
+not remembered as rejected; only a failed model probe is. The location is
+the command collection's path, so saved profiles match on every start.
+
+Refs #5588
+---
+ .../SinowealthControllerDetect.cpp                 | 246 +++++++++++++++++++--
+ .../SinowealthKeyboard49Controller.cpp             |  52 +++--
+ .../SinowealthKeyboard49Controller.h               |  20 +-
+ 3 files changed, 281 insertions(+), 37 deletions(-)
+
+diff --git a/Controllers/SinowealthController/SinowealthControllerDetect.cpp b/Controllers/SinowealthController/SinowealthControllerDetect.cpp
+index bd00f8fe..f267d58e 100644
+--- a/Controllers/SinowealthController/SinowealthControllerDetect.cpp
++++ b/Controllers/SinowealthController/SinowealthControllerDetect.cpp
+@@ -29,9 +29,12 @@
+ #include "RGBController_SinowealthGMOW.h"
+ #include "RGBController_GenesisXenon200.h"
+ #include <hidapi.h>
++#include <algorithm>
++#include <cctype>
+ #include <chrono>
+ #include <map>
+ #include <set>
++#include <vector>
+ #include "LogManager.h"
+ 
+ #define SINOWEALTH_VID                      0x258A
+@@ -447,14 +450,144 @@ DetectedControllers DetectSinowealthKeyboard10c(hid_device_info* info, const std
+     return(detected_controllers);
+ }
+ 
++/*---------------------------------------------------------*\
++| One key per physical device.  On Windows every top-level  |
++| collection has its own path, such as                      |
++|   \\?\hid#vid_258a&pid_0049&mi_01&col05                   |
++|     #8&2b3d5b1e&0&0004#{guid}                             |
++| The collection shows up as "&col05" and as the last       |
++| "&0004" of the instance ID; dropping both gives the same  |
++| key for every collection of one keyboard.  On Linux and   |
++| macOS the collections already share one path              |
++\*---------------------------------------------------------*/
++static std::string SinowealthDeviceKey(const char* path)
++{
++    std::string key   = path;
++    std::string lower = key;
++
++    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c){ return (char)std::tolower(c); });
++
++    size_t col = lower.find("&col");
++
++    if(col == std::string::npos)
++    {
++        return(key);
++    }
++
++    size_t end = col + 4;
++
++    while(end < key.size() && std::isxdigit((unsigned char)key[end]))
++    {
++        end++;
++    }
++
++    key.erase(col, end - col);
++
++    size_t guid     = key.rfind('#');
++    size_t instance = (guid == std::string::npos || guid == 0) ? std::string::npos : key.rfind('#', guid - 1);
++    size_t last     = (guid == std::string::npos) ? std::string::npos : key.rfind('&', guid);
++
++    if(last != std::string::npos && instance != std::string::npos && last > instance)
++    {
++        key.erase(last, guid - last);
++    }
++
++    return(key);
++}
++
++/*---------------------------------------------------------*\
++| Feature report IDs declared in the report descriptor of   |
++| an open device.  On Windows hidapi rebuilds the           |
++| descriptor of the opened collection only, so this tells   |
++| which reports can be sent through that path.  Returns an  |
++| empty set if the descriptor can't be read                 |
++\*---------------------------------------------------------*/
++static std::set<unsigned char> SinowealthFeatureReportIDs(hid_device* dev)
++{
++    std::set<unsigned char> ids;
++
++#ifdef HID_API_MAKE_VERSION
++#if HID_API_VERSION >= HID_API_MAKE_VERSION(0, 14, 0)
++    unsigned char               desc[HID_API_MAX_REPORT_DESCRIPTOR_SIZE];
++    int                         size      = hid_get_report_descriptor(dev, desc, sizeof(desc));
++    int                         pos       = 0;
++    unsigned char               report_id = 0;
++    std::vector<unsigned char>  pushed_ids;
++
++    while(pos < size)
++    {
++        unsigned char prefix = desc[pos];
++
++        /*-------------------------------------------------*\
++        | Long item: prefix, data size, tag, data           |
++        \*-------------------------------------------------*/
++        if(prefix == 0xFE)
++        {
++            if(pos + 1 >= size)
++            {
++                break;
++            }
++
++            pos += 3 + desc[pos + 1];
++            continue;
++        }
++
++        int data_size = ((prefix & 0x03) == 0x03) ? 4 : (prefix & 0x03);
++
++        if(pos + data_size >= size)
++        {
++            break;
++        }
++
++        switch(prefix & 0xFC)
++        {
++            case 0x84:      // Report ID
++                if(data_size >= 1)
++                {
++                    report_id = desc[pos + 1];
++                }
++                break;
++
++            case 0xA4:      // Push
++                pushed_ids.push_back(report_id);
++                break;
++
++            case 0xB4:      // Pop
++                if(!pushed_ids.empty())
++                {
++                    report_id = pushed_ids.back();
++                    pushed_ids.pop_back();
++                }
++                break;
++
++            case 0xB0:      // Feature
++                ids.insert(report_id);
++                break;
++        }
++
++        pos += 1 + data_size;
++    }
++#endif
++#endif
++
++    return(ids);
++}
++
+ DetectedControllers DetectSinowealthKeyboard49(hid_device_info* info, const std::string& name)
+ {
+     std::lock_guard<std::recursive_mutex> lock(sinowealth_registry_mutex);
+ 
+-    static std::map<std::string, std::chrono::steady_clock::time_point> rejected_paths;
++    static std::map<std::string, std::chrono::steady_clock::time_point> rejected_devices;
++
++    static const unsigned char report_ids[3] =
++    {
++        SINOWEALTH_49_REPORT_COMMAND,
++        SINOWEALTH_49_REPORT_DATA,
++        SINOWEALTH_49_REPORT_FRAME
++    };
+ 
+     DetectedControllers                     detected_controllers;
+-    std::string                             path = info->path;
++    std::string                             key  = SinowealthDeviceKey(info->path);
+     std::chrono::steady_clock::time_point   now  = std::chrono::steady_clock::now();
+ 
+     /*-----------------------------------------------------*\
+@@ -463,46 +596,127 @@ DetectedControllers DetectSinowealthKeyboard49(hid_device_info* info, const std:
+     | the model ID with the probe the vendor app sends, and |
+     | only continue for known models.                       |
+     |                                                       |
+-    | This detector runs once per vendor collection, and on |
+-    | Linux they all share one path: probe each path once,  |
+-    | and skip paths that failed the probe moments ago      |
++    | This detector runs once per vendor collection.  Probe |
++    | each keyboard once, and skip keyboards that failed    |
++    | the probe moments ago                                 |
+     \*-----------------------------------------------------*/
+-    if(rejected_paths.count(path) != 0 && (now - rejected_paths[path]) < std::chrono::seconds(5))
++    if(rejected_devices.count(key) != 0 && (now - rejected_devices[key]) < std::chrono::seconds(5))
+     {
+         return(detected_controllers);
+     }
+ 
+-    if(!SinowealthClaimDevice(path))
++    if(!SinowealthClaimDevice(key))
+     {
+         return(detected_controllers);
+     }
+ 
+-    hid_device*   dev      = hid_open_path(info->path);
++    /*-----------------------------------------------------*\
++    | Find the path that reaches each report: one path for  |
++    | all of them on Linux, one per collection on Windows   |
++    \*-----------------------------------------------------*/
++    hid_device*                 report_devs[3] = { nullptr, nullptr, nullptr };
++    std::string                 report_paths[3];
++    std::vector<hid_device*>    opened_devs;
++    std::set<std::string>       seen_paths;
++    hid_device_info*            enumerated     = hid_enumerate(info->vendor_id, info->product_id);
++
++    for(hid_device_info* entry = enumerated; entry != nullptr; entry = entry->next)
++    {
++        if(entry->interface_number != info->interface_number
++        || entry->usage_page       != info->usage_page
++        || SinowealthDeviceKey(entry->path) != key
++        || !seen_paths.insert(entry->path).second)
++        {
++            continue;
++        }
++
++        hid_device* dev = hid_open_path(entry->path);
++
++        if(!dev)
++        {
++            continue;
++        }
++
++        std::set<unsigned char> ids = SinowealthFeatureReportIDs(dev);
++
++        /*-------------------------------------------------*\
++        | Without a descriptor, a path that is not split    |
++        | into collections still reaches every report       |
++        \*-------------------------------------------------*/
++        if(ids.empty() && key == entry->path)
++        {
++            ids.insert(report_ids, report_ids + 3);
++        }
++
++        bool used = false;
++
++        for(unsigned int i = 0; i < 3; i++)
++        {
++            if(report_devs[i] == nullptr && ids.count(report_ids[i]) != 0)
++            {
++                report_devs[i]  = dev;
++                report_paths[i] = entry->path;
++                used            = true;
++            }
++        }
++
++        if(used)
++        {
++            opened_devs.push_back(dev);
++        }
++        else
++        {
++            hid_close(dev);
++        }
++    }
++
++    hid_free_enumeration(enumerated);
++
++    bool          complete = (report_devs[0] != nullptr && report_devs[1] != nullptr && report_devs[2] != nullptr);
+     unsigned char model_id = 0;
+ 
+-    if(dev)
++    if(complete)
+     {
+-        model_id = SinowealthKeyboard49Controller::ProbeModel(dev);
++        model_id = SinowealthKeyboard49Controller::ProbeModel(report_devs[0]);
+     }
+ 
+     if(model_id == SINOWEALTH_49_MODEL_K636)
+     {
+-        SinowealthKeyboard49Controller*     controller     = new SinowealthKeyboard49Controller(dev, info->path, "Redragon K636 Kitava");
+-        RGBController_SinowealthKeyboard49* rgb_controller = new RGBController_SinowealthKeyboard49(controller, [path](){ SinowealthUnclaimDevice(path); });
++        LOG_INFO("[%s] Report 5 at \"HID: %s\", report 6 at \"HID: %s\", report 8 at \"HID: %s\"", name.c_str(), report_paths[0].c_str(), report_paths[1].c_str(), report_paths[2].c_str());
++
++        /*-------------------------------------------------*\
++        | Use the command collection's path as the location |
++        | so that it is the same on every start             |
++        \*-------------------------------------------------*/
++        SinowealthKeyboard49Controller*     controller     = new SinowealthKeyboard49Controller(report_devs[0], report_devs[1], report_devs[2], report_paths[0].c_str(), "Redragon K636 Kitava");
++        RGBController_SinowealthKeyboard49* rgb_controller = new RGBController_SinowealthKeyboard49(controller, [key](){ SinowealthUnclaimDevice(key); });
+ 
+         detected_controllers.push_back(rgb_controller);
+     }
+     else
+     {
+-        LOG_DEBUG("[%s] No known model at \"HID: %s\" (model ID 0x%02X)", name.c_str(), info->path, model_id);
++        /*-------------------------------------------------*\
++        | When the keyboard is plugged in, Windows adds its |
++        | collections one by one, so a missing report may   |
++        | still arrive: only a failed probe is remembered   |
++        \*-------------------------------------------------*/
++        if(!complete)
++        {
++            LOG_DEBUG("[%s] Reports 5, 6 and 8 not all found at \"HID: %s\"", name.c_str(), info->path);
++        }
++        else
++        {
++            LOG_DEBUG("[%s] No known model at \"HID: %s\" (model ID 0x%02X)", name.c_str(), report_paths[0].c_str(), model_id);
+ 
+-        if(dev)
++            rejected_devices[key] = now;
++        }
++
++        for(hid_device* dev : opened_devs)
+         {
+             hid_close(dev);
+         }
+ 
+-        SinowealthUnclaimDevice(path);
+-        rejected_paths[path] = now;
++        SinowealthUnclaimDevice(key);
+     }
+ 
+     return(detected_controllers);
+diff --git a/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.cpp b/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.cpp
+index a8c62b7e..c650503c 100644
+--- a/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.cpp
++++ b/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.cpp
+@@ -29,9 +29,9 @@
+ |                        block, 06 08 B8 00 40 on write     |
+ | Report 8 (382 bytes):  live frame, 08 0A 7A 01 + RGB      |
+ \*---------------------------------------------------------*/
+-#define REPORT_COMMAND                  0x05
+-#define REPORT_DATA                     0x06
+-#define REPORT_FRAME                    0x08
++#define REPORT_COMMAND                  SINOWEALTH_49_REPORT_COMMAND
++#define REPORT_DATA                     SINOWEALTH_49_REPORT_DATA
++#define REPORT_FRAME                    SINOWEALTH_49_REPORT_FRAME
+ 
+ #define COMMAND_SIZE                    6
+ #define PROBE_REPLY_SIZE                8
+@@ -77,12 +77,14 @@ static const unsigned char frame_header[FRAME_HEADER_SIZE]  = { REPORT_FRAME, 0x
+ #define FRAME_PERIOD                    std::chrono::milliseconds(16)
+ #define FRAME_SETTLE                    std::chrono::milliseconds(200)
+ 
+-SinowealthKeyboard49Controller::SinowealthKeyboard49Controller(hid_device* dev_handle, const char* path, std::string dev_name)
++SinowealthKeyboard49Controller::SinowealthKeyboard49Controller(hid_device* command_handle, hid_device* data_handle, hid_device* frame_handle, const char* path, std::string dev_name)
+ {
+-    dev             = dev_handle;
++    command_dev     = command_handle;
++    data_dev        = data_handle;
++    frame_dev       = frame_handle;
+     location        = path;
+     name            = dev_name;
+-    last_frame_time  = std::chrono::steady_clock::now() - FRAME_PERIOD;
++    last_frame_time = std::chrono::steady_clock::now() - FRAME_PERIOD;
+     last_block_time = std::chrono::steady_clock::now() - FRAME_SETTLE;
+ }
+ 
+@@ -94,9 +96,23 @@ void SinowealthKeyboard49Controller::WaitForBlockWrite()
+     std::this_thread::sleep_until(last_block_time + BLOCK_SETTLE);
+ }
+ 
++/*---------------------------------------------------------*\
++| On Linux all three handles are the same one: close each   |
++| distinct handle once                                      |
++\*---------------------------------------------------------*/
+ SinowealthKeyboard49Controller::~SinowealthKeyboard49Controller()
+ {
+-    hid_close(dev);
++    hid_close(command_dev);
++
++    if(data_dev != command_dev)
++    {
++        hid_close(data_dev);
++    }
++
++    if(frame_dev != command_dev && frame_dev != data_dev)
++    {
++        hid_close(frame_dev);
++    }
+ }
+ 
+ /*---------------------------------------------------------*\
+@@ -105,18 +121,18 @@ SinowealthKeyboard49Controller::~SinowealthKeyboard49Controller()
+ | declared as 6 bytes.  Returns 0 when the reply does not   |
+ | have the expected form.                                   |
+ \*---------------------------------------------------------*/
+-unsigned char SinowealthKeyboard49Controller::ProbeModel(hid_device* dev)
++unsigned char SinowealthKeyboard49Controller::ProbeModel(hid_device* command_handle)
+ {
+     unsigned char reply[PROBE_REPLY_SIZE] = { REPORT_COMMAND };
+ 
+-    if(hid_send_feature_report(dev, probe_command, COMMAND_SIZE) < 0)
++    if(hid_send_feature_report(command_handle, probe_command, COMMAND_SIZE) < 0)
+     {
+         return(0);
+     }
+ 
+     std::this_thread::sleep_for(PACKET_DELAY);
+ 
+-    int len = hid_get_feature_report(dev, reply, PROBE_REPLY_SIZE);
++    int len = hid_get_feature_report(command_handle, reply, PROBE_REPLY_SIZE);
+ 
+     std::this_thread::sleep_for(PACKET_DELAY);
+ 
+@@ -141,7 +157,7 @@ std::string SinowealthKeyboard49Controller::GetName()
+ std::string SinowealthKeyboard49Controller::GetSerialString()
+ {
+     wchar_t serial_string[128];
+-    int     ret = hid_get_serial_number_string(dev, serial_string, 128);
++    int     ret = hid_get_serial_number_string(command_dev, serial_string, 128);
+ 
+     if(ret != 0)
+     {
+@@ -191,14 +207,14 @@ bool SinowealthKeyboard49Controller::ReadPalette(unsigned char* palette)
+ 
+     WaitForBlockWrite();
+ 
+-    if(hid_send_feature_report(dev, command, COMMAND_SIZE) < 0)
++    if(hid_send_feature_report(command_dev, command, COMMAND_SIZE) < 0)
+     {
+         return(false);
+     }
+ 
+     std::this_thread::sleep_for(PACKET_DELAY);
+ 
+-    int len = hid_get_feature_report(dev, buf, DATA_SIZE);
++    int len = hid_get_feature_report(data_dev, buf, DATA_SIZE);
+ 
+     std::this_thread::sleep_for(PACKET_DELAY);
+ 
+@@ -240,7 +256,7 @@ bool SinowealthKeyboard49Controller::SetMode(unsigned char mode, const sinowealt
+ 
+         memcpy(palette_buf + BLOCK_HEADER_SIZE, palette, SINOWEALTH_49_PALETTE_BLOCK_SIZE);
+ 
+-        if(hid_send_feature_report(dev, palette_buf, DATA_SIZE) < 0)
++        if(hid_send_feature_report(data_dev, palette_buf, DATA_SIZE) < 0)
+         {
+             return(false);
+         }
+@@ -302,7 +318,7 @@ void SinowealthKeyboard49Controller::SendFrame(const std::vector<unsigned char>&
+ 
+     std::this_thread::sleep_until(std::max(last_frame_time + FRAME_PERIOD, last_block_time + FRAME_SETTLE));
+ 
+-    hid_send_feature_report(dev, buf, sizeof(buf));
++    hid_send_feature_report(frame_dev, buf, sizeof(buf));
+ 
+     last_frame_time = std::chrono::steady_clock::now();
+ }
+@@ -319,7 +335,7 @@ bool SinowealthKeyboard49Controller::ReadConfig(unsigned char* buf)
+ 
+     WaitForBlockWrite();
+ 
+-    if(hid_send_feature_report(dev, command, COMMAND_SIZE) < 0)
++    if(hid_send_feature_report(command_dev, command, COMMAND_SIZE) < 0)
+     {
+         return(false);
+     }
+@@ -327,7 +343,7 @@ bool SinowealthKeyboard49Controller::ReadConfig(unsigned char* buf)
+     std::this_thread::sleep_for(PACKET_DELAY);
+ 
+     buf[0]  = REPORT_DATA;
+-    int len = hid_get_feature_report(dev, buf, DATA_SIZE);
++    int len = hid_get_feature_report(data_dev, buf, DATA_SIZE);
+ 
+     std::this_thread::sleep_for(PACKET_DELAY);
+ 
+@@ -363,7 +379,7 @@ bool SinowealthKeyboard49Controller::WriteConfig(unsigned char* buf)
+ 
+     buf[1] = CONFIG_WRITE;
+ 
+-    int ret = hid_send_feature_report(dev, buf, DATA_SIZE);
++    int ret = hid_send_feature_report(data_dev, buf, DATA_SIZE);
+ 
+     last_block_time = std::chrono::steady_clock::now();
+ 
+diff --git a/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.h b/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.h
+index db53b1df..d91c13b9 100644
+--- a/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.h
++++ b/Controllers/SinowealthController/SinowealthKeyboard49Controller/SinowealthKeyboard49Controller.h
+@@ -64,13 +64,25 @@ typedef struct
+     unsigned char   brightness;
+ } sinowealth_49_effect_settings;
+ 
++/*---------------------------------------------------------*\
++| Reports 5, 6 and 8 are declared in separate top-level     |
++| collections of interface 1.  On Linux (hidraw) one path   |
++| reaches all of them.  On Windows each collection has its  |
++| own path, and a report can only be sent through the       |
++| collection that declares it.  So the controller takes one |
++| handle per report; on Linux all three are the same handle |
++\*---------------------------------------------------------*/
++#define SINOWEALTH_49_REPORT_COMMAND        0x05
++#define SINOWEALTH_49_REPORT_DATA           0x06
++#define SINOWEALTH_49_REPORT_FRAME          0x08
++
+ class SinowealthKeyboard49Controller
+ {
+ public:
+-    SinowealthKeyboard49Controller(hid_device* dev_handle, const char* path, std::string dev_name);
++    SinowealthKeyboard49Controller(hid_device* command_handle, hid_device* data_handle, hid_device* frame_handle, const char* path, std::string dev_name);
+     ~SinowealthKeyboard49Controller();
+ 
+-    static unsigned char ProbeModel(hid_device* dev);
++    static unsigned char ProbeModel(hid_device* command_handle);
+ 
+     std::string GetLocation();
+     std::string GetName();
+@@ -83,7 +95,9 @@ public:
+     void        SendFrame(const std::vector<unsigned char>& frame);
+ 
+ private:
+-    hid_device*                                         dev;
++    hid_device*                                         command_dev;
++    hid_device*                                         data_dev;
++    hid_device*                                         frame_dev;
+     std::string                                         location;
+     std::string                                         name;
+     std::mutex                                          dev_mutex;

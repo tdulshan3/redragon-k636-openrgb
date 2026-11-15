@@ -3,10 +3,16 @@
  * official app's packets. A fake hidapi records every SET and replays the keyboard's replies from a
  * capture; nothing touches a real device.
  *
+ * Every vector runs twice: once with one handle for all reports (Linux, where one hidraw path reaches
+ * every collection), and once with one handle per report collection (Windows), where the fake refuses
+ * any report sent or read through the wrong collection's handle.
+ *
  *   ./build.sh && ./driver_check vectors.txt
  */
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -19,9 +25,33 @@ typedef std::vector<unsigned char> bytes;
 static std::vector<bytes> sent;
 static bytes              probe_reply, config_reply, palette_reply;
 static bool               palette_requested;
+static bool               split_collections;
+static int                wrong_collection;
+static std::map<hid_device*, int> closes;
 
-int hid_send_feature_report(hid_device*, const unsigned char* data, size_t length)
+/*------------------------------------------------------------*\
+| Fake handles: in the Windows run, handle N reaches only the  |
+| collection that declares report N                            |
+\*------------------------------------------------------------*/
+static hid_device* fake_handle(uintptr_t n) { return reinterpret_cast<hid_device*>(n); }
+
+static bool reachable(hid_device* dev, unsigned char report_id)
 {
+    if(split_collections && dev != fake_handle(report_id))
+    {
+        wrong_collection++;
+        printf("  report %u went through the handle for report %u\n", report_id, (unsigned)reinterpret_cast<uintptr_t>(dev));
+        return false;
+    }
+    return true;
+}
+
+int hid_send_feature_report(hid_device* dev, const unsigned char* data, size_t length)
+{
+    if(!reachable(dev, data[0]))
+    {
+        return -1;
+    }
     sent.emplace_back(data, data + length);
     if(data[0] == 0x05)
     {
@@ -30,8 +60,12 @@ int hid_send_feature_report(hid_device*, const unsigned char* data, size_t lengt
     return (int)length;
 }
 
-int hid_get_feature_report(hid_device*, unsigned char* data, size_t length)
+int hid_get_feature_report(hid_device* dev, unsigned char* data, size_t length)
 {
+    if(!reachable(dev, data[0]))
+    {
+        return -1;
+    }
     const bytes& reply = (data[0] == 0x05) ? probe_reply : (palette_requested ? palette_reply : config_reply);
     size_t       n     = std::min(length, reply.size());
     memcpy(data, reply.data(), n);
@@ -39,7 +73,7 @@ int hid_get_feature_report(hid_device*, unsigned char* data, size_t length)
 }
 
 int  hid_get_serial_number_string(hid_device*, wchar_t* s, size_t) { s[0] = 0; return 0; }
-void hid_close(hid_device*) {}
+void hid_close(hid_device* dev) { closes[dev]++; }
 std::string StringUtils::wstring_to_string(const std::wstring) { return ""; }
 
 static bytes from_hex(const std::string& hex)
@@ -67,15 +101,15 @@ static bool check(const char* what, const std::vector<bytes>& expected)
     return same;
 }
 
-int main(int argc, char** argv)
+static bool run_vectors(const char* file, hid_device* cmd_dev, hid_device* data_dev, hid_device* frame_dev)
 {
-    std::ifstream in(argc > 1 ? argv[1] : "vectors.txt");
+    std::ifstream in(file);
     std::string   line;
     bool          all_ok = true;
     bytes         frame, read_reply, palette_packet;
     std::string   case_line;
 
-    SinowealthKeyboard49Controller controller(nullptr, "fake", "K636");
+    SinowealthKeyboard49Controller controller(cmd_dev, data_dev, frame_dev, "fake", "K636");
 
     const bytes probe_cmd  = { 0x05, 0x05, 0x81, 0x00, 0x00, 0x00 };
     const bytes config_cmd = { 0x05, 0x83, 0xB6, 0x00, 0x00, 0x00 };
@@ -91,7 +125,7 @@ int main(int argc, char** argv)
             ss >> hex;
             probe_reply = from_hex(hex);
             sent.clear();
-            unsigned char model = SinowealthKeyboard49Controller::ProbeModel(nullptr);
+            unsigned char model = SinowealthKeyboard49Controller::ProbeModel(cmd_dev);
             all_ok &= check("probe packet", { probe_cmd });
             printf("%-60s %s\n", "probe reply recognised as K636", model == SINOWEALTH_49_MODEL_K636 ? "yes" : "NO");
             all_ok &= (model == SINOWEALTH_49_MODEL_K636);
@@ -181,6 +215,34 @@ int main(int argc, char** argv)
     bool refused = !controller.SetMode(0x01, nullptr);
     printf("%-60s %s\n", "missing 5a a5 marker: write refused", (refused && sent.size() == 1) ? "yes" : "NO");
     all_ok &= refused && sent.size() == 1;
+
+    return all_ok;
+}
+
+int main(int argc, char** argv)
+{
+    const char* file   = argc > 1 ? argv[1] : "vectors.txt";
+    bool        all_ok = true;
+
+    printf("== Linux: one handle reaches every report ==\n");
+    split_collections = false;
+    wrong_collection  = 0;
+    closes.clear();
+    all_ok &= run_vectors(file, fake_handle(1), fake_handle(1), fake_handle(1));
+    bool closed_once = closes.size() == 1 && closes[fake_handle(1)] == 1;
+    printf("%-60s %s\n", "shared handle closed exactly once", closed_once ? "yes" : "NO");
+    all_ok &= closed_once;
+
+    printf("== Windows: one handle per report collection ==\n");
+    split_collections = true;
+    wrong_collection  = 0;
+    closes.clear();
+    all_ok &= run_vectors(file, fake_handle(5), fake_handle(6), fake_handle(8));
+    printf("%-60s %s\n", "every report used its own collection", wrong_collection == 0 ? "yes" : "NO");
+    all_ok &= (wrong_collection == 0);
+    bool closed_each = closes.size() == 3 && closes[fake_handle(5)] == 1 && closes[fake_handle(6)] == 1 && closes[fake_handle(8)] == 1;
+    printf("%-60s %s\n", "each of the three handles closed once", closed_each ? "yes" : "NO");
+    all_ok &= closed_each;
 
     printf("%s\n", all_ok ? "ALL IDENTICAL" : "MISMATCH");
     return all_ok ? 0 : 1;

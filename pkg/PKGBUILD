@@ -15,10 +15,12 @@ conflicts=(openrgb)
 _commit=c6fc8016d215cca17d660c47746a08d7ea6a9175
 source=("openrgb::git+https://gitlab.com/CalcProgrammer1/OpenRGB.git#commit=${_commit}"
         0001-Add-Redragon-K636-Sinowealth-PID-0049-keyboard-contr.patch
-        0002-K636-shorter-consistent-effect-names.patch)
+        0002-K636-shorter-consistent-effect-names.patch
+        0003-K636-find-the-report-collections-on-Windows.patch)
 sha256sums=('SKIP'
             '66ee4b6fb132f3aef6740807af67f66cec05c68e9c5f208f7ad226542e274b5b'
-            '11cd51bec40bc54452167a3f964ace7fabfb18326a668489f4aad577aed8b83c')
+            '11cd51bec40bc54452167a3f964ace7fabfb18326a668489f4aad577aed8b83c'
+            '573b911134b717caed33c4fbbb6d72d120abcc710beb1b12b15dc76c075e0227')
 
 pkgver() {
     cd openrgb

@@ -104,7 +104,10 @@ Effects, named from watching each one:
 
   Waiting 100 ms after block writes, and 200 ms before frames, has been reliable.
 - **Don't interleave packets from two programs.** A config read (`05 83 B6`, then GET) collided with another process's live frames, and the GET failed with EPIPE. After that the lighting controller timed out on every SET until the keyboard was replugged. Typing kept working, and nothing was damaged.
-- **Linux vs Windows:** on Linux all four vendor collections share one hidraw path, so a detector registered on 0xFF00/0x01 runs once per collection and needs to deduplicate. On Windows they are separate paths, and reports 5, 6 and 8 are probably on different collections. Windows is untested.
+- **Linux vs Windows:** interface 1 has eight top-level collections, in this order: system control (report 1), consumer (2), vendor (input report 3), keyboard (4), vendor (feature 5), vendor (feature 6), mouse (7), vendor (feature 8). All four vendor collections are 0xFF00/0x01.
+  - On Linux they all share one hidraw path, so a detector registered on 0xFF00/0x01 runs once per collection and needs to deduplicate.
+  - On Windows each collection is its own path (`&col03`, `&col05`, `&col06`, `&col08`), and a report can only be sent through the collection that declares it. So reports 5, 6 and 8 each need their own handle. hidapi's `hid_get_report_descriptor` rebuilds each collection's descriptor on Windows, which shows which report a path carries.
+  - Windows is untested on a real keyboard.
 
 ## Tested on a K636 (Linux)
 

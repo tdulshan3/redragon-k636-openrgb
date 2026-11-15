@@ -28,8 +28,9 @@ Upstream OpenRGB doesn't support this keyboard yet. The protocol has been report
 Not supported yet:
 
 - the keyboard's saved per-key "custom" mode;
-- Windows;
 - other K6** models.
+
+Windows support is written and checked offline, but hasn't been tried on a keyboard yet. See [Windows](#windows-untested).
 
 ## Build from scratch
 
@@ -90,6 +91,15 @@ To go back to the distribution's version: `sudo pacman -S openrgb`.
 
 5. **Run it** from the `build` folder: `./openrgb`
 
+### Windows (untested)
+
+On Windows the keyboard's lighting reports sit behind three separate HID paths, one per collection; patch 0003 finds them. It hasn't been run on a real keyboard yet.
+
+1. **Get a build.** The [Windows build](.github/workflows/windows-build.yml) GitHub Action builds OpenRGB at the tested commit with all three patches. Open the repo's **Actions** tab, pick the latest **Windows build** run, and download **OpenRGB-K636-Windows-x64** from its Artifacts. To build it yourself instead, follow OpenRGB's [Compiling guide](https://gitlab.com/CalcProgrammer1/OpenRGB/-/blob/master/Documentation/Compiling.md) after applying the patches.
+2. **Close other RGB software** that talks to the same devices: the Redragon app, and Gigabyte Control Center's RGB Fusion if OpenRGB should also drive the motherboard.
+3. **Unzip anywhere and run `OpenRGB.exe`.** The K636 and the Gigabyte `048d:5702` RGB controller are plain USB HID devices, so neither needs the PawnIO driver; skip installing it unless you need SMBus devices such as RGB RAM.
+4. **If the keyboard doesn't show up,** start it as `OpenRGB.exe --loglevel debug` and look for lines starting `[Redragon K636]` in the newest log in `%APPDATA%\OpenRGB\logs`. When it works, the log names the path used for each report.
+
 ## Using it
 
 - **Effect changes are saved in the keyboard**, like with the Redragon app. They're written once you stop adjusting a slider or the colour wheel for 0.3 s.
@@ -104,6 +114,7 @@ To go back to the distribution's version: `sudo pacman -S openrgb`.
 | [`PROTOCOL.md`](PROTOCOL.md) | The full protocol: identification, config, palette and per-key blocks, effects, live frames, key matrix, timing pitfalls |
 | [`patches/`](patches) | The OpenRGB driver (`Controllers/SinowealthController/SinowealthKeyboard49Controller/` plus a detector) |
 | [`pkg/PKGBUILD`](pkg/PKGBUILD) | Arch package: upstream OpenRGB at the tested commit, plus the patches |
+| [`.github/workflows/windows-build.yml`](.github/workflows/windows-build.yml) | GitHub Action that builds the patched OpenRGB for Windows x64 |
 | [`61-k636.rules`](61-k636.rules) | udev rule giving the logged-in user access to `258a:0049` |
 | [`k636_matrix.json`](k636_matrix.json) | The 6 × 21 key matrix, with the per-key and live-frame offset formulas |
 | [`k636.py`](k636.py) | Test tool used to work out the protocol (see below) |
